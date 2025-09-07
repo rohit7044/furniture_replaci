@@ -39,47 +39,10 @@ def detection(image, text_prompt):
     # print(result)
     return result
 
-def generate_surrounding_points(center, min_dist, max_dist):
-    
-    cx, cy = center
-    points = [center]  # include the center point
-
-    # 6 directions (N, S, E, W, NE, NW)
-    directions = [
-        (0, -1),   # North
-        (0,  1),   # South
-        (1,  0),   # East
-        (-1, 0),   # West
-        (1, -1),   # NE
-        (-1, -1),  # NW
-    ]
-
-    for dx, dy in directions:
-        dist = 13 * (random.randint(min_dist, max_dist))
-        x = cx + dx * dist
-        y = cy + dy * dist
-        points.append([x, y])
-    
-
-    return points
-
-
 def segmentation(image):
     seg_model = Sam2Model.from_pretrained(segmenter_id).to(device)
     seg_processor = Sam2Processor.from_pretrained(segmenter_id)
 
-    img_h, img_w = image.shape[:2]
-    center = (img_w // 2, img_h // 2)
-
-    points = generate_surrounding_points(center,min_dist=50, max_dist=70)
-
-    points = [[int(x), int(y)] for (x, y) in points]
-
-    input_points = [[points]]  # ✅ 4 levels
-    input_labels = [[ [1] * len(points) ]]  # ✅ 4 levels
-
-
-    # inputs = seg_processor(images=image, input_points=input_points, input_labels=input_labels, return_tensors="pt").to(device)
     inputs = seg_processor(images=image, return_tensors="pt").to(device)
 
     with torch.no_grad():
@@ -88,21 +51,6 @@ def segmentation(image):
     masks = seg_processor.post_process_masks(outputs.pred_masks.cpu(), inputs["original_sizes"])[0]
 
     return masks
-
-def get_largest_mask(masks):
-    max_area = 0
-    largest_mask = None
-
-    for mask in masks[0]:  # SAM returns list of [num_masks, 1, H, W]
-        mask_np = mask[0].numpy().astype(np.uint8)
-        area = np.sum(mask_np)
-
-        if area > max_area:
-            max_area = area
-            largest_mask = mask_np
-
-    return largest_mask
-
 
 def visualize_masks(image, masks):
     if not isinstance(image, np.ndarray):
@@ -129,7 +77,6 @@ def visualize_masks(image, masks):
     cv2.imshow("Segmentation Masks Overlay", overlay)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
-
 
 def drawbbox(image_path, boxes, labels=None):
     image = cv2.imread(image_path)
@@ -237,6 +184,48 @@ def convertBGR2RGB(image):
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
+def findcornerpoints(mask_image, orig_image=None, visualize=True):
+    mask = mask_image.cpu().numpy().squeeze()
+    if mask.ndim == 3:
+        mask = mask[0]
+    disp = (mask > 0).astype(np.uint8) * 255
+
+    contours, _ = cv2.findContours(disp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Largest contour
+    cnt = max(contours, key=cv2.contourArea)
+
+    hull = cv2.convexHull(cnt)    
+    rect = cv2.minAreaRect(hull)
+    box = cv2.boxPoints(rect)
+    corners = np.array(box, dtype=np.float32)
+    print("Detected corners (unsorted):", corners)
+
+    # Visualize the corners on the original image
+    vis_image = orig_image.copy()
+
+    # Draw the convex hull contour (optional)
+    cv2.drawContours(vis_image, [hull], -1, (0, 255, 0), 2)  # Green contour
+
+    # Draw the corners as red circles
+    for (x, y) in corners.astype(int):
+        cv2.circle(vis_image, (x, y), 8, (0, 0, 255), -1)  # Red circles
+        # Optional: add text labels for each corner
+        cv2.putText(vis_image, f"({x},{y})", (int(x)+10, int(y)), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    # Show the result
+    cv2.imshow("Detected Corners", vis_image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    # return ordered
+
+
+    
+
+    
+
+
 text_prompt = "a wall"
 wall_img = read_img(WALL_IMAGE_PATH)
 tv_img = read_img(TV_IMAGE_PATH)
@@ -244,18 +233,23 @@ r_wall_height = 2.6 # in meters
 r_wall_width = 3.8 # in meters
 r_tv_height = 0.7 # in meters
 r_tv_width = 1.2 # in meters
+
 detection_results = detection(wall_img, text_prompt)
+
 d_cropped_img = crop_bbox(wall_img, detection_results[0])
 d_cropped_img = convertBGR2RGB(d_cropped_img)
-# wall_img = convertBGR2RGB(np.array(wall_img))
-segmentation_results = segmentation(d_cropped_img)
-# visualize_mask(d_cropped_img, segmentation_results)
 
-visualize_masks(d_cropped_img, segmentation_results)
 # drawbbox(WALL_IMAGE_PATH, detection_results)
 
+wall_img = convertBGR2RGB(np.array(wall_img))
+segmentation_results = segmentation(d_cropped_img)
+# visualize_masks(d_cropped_img, segmentation_results)
+findcornerpoints(segmentation_results,d_cropped_img)
 
-tv_img = convertBGR2RGB(np.array(tv_img))
+
+
+
+# tv_img = convertBGR2RGB(np.array(tv_img))
 
 # overlay_img = overlay_image(cropped_img, tv_img, r_wall_width, r_wall_height, r_tv_width, r_tv_height, center=True)
 
