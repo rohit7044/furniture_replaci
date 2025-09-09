@@ -15,7 +15,7 @@ import utils
 
 st.set_page_config(layout="wide", page_title="TV-on-Wall Layout")
 
-st.title("Place TV on Wall — demo")
+st.title("TV on Wall — demo")
 st.write("Upload a wall image and a TV image, provide real-world sizes (meters), then press Run.")
 
 
@@ -32,8 +32,8 @@ with col2:
     tv_height_m = st.number_input("TV height (meters)", min_value=0.01, value=0.7, step=0.01)
 
 text_prompt = st.text_input("Text prompt for detector", value="a wall")
-fine_tuning_text_prompt = st.text_input("Text prompt for fine tuning", value="A sleek flat-screen TV mounted on the wall, realistic lighting")
-negative_text_prompt = st.text_input("Negative text prompt for fine tuning", value="cartoon, cgi, 3d render, lowres, blurry")
+fine_tuning_text_prompt = st.text_input("Text prompt for fine tuning", value="A sleek flat-screen black TV mounted on the wall, realistic lighting")
+negative_text_prompt = st.text_input("Negative text prompt for fine tuning", value="cartoon, cgi, 3d render, lowres, blurry, bad anatomy, deformed, ugly, disfigured")
 run = st.button("Run placement")
 
 # Helper to convert uploaded file to PIL
@@ -45,7 +45,7 @@ def load_pil(uploader_file):
 @st.cache_resource(show_spinner=False)
 def load_models(detector_id="IDEA-Research/grounding-dino-tiny",
                 segmenter_id="facebook/sam2.1-hiera-tiny",
-                inpaint_id="stabilityai/stable-diffusion-2-inpainting"):
+                inpaint_id="stable-diffusion-v1-5/stable-diffusion-v1-5"):
     """
     Loads and returns detector, segmenter, and inpainting pipelines.
     Cached by Streamlit so subsequent calls return the same objects (no re-download).
@@ -65,7 +65,7 @@ def load_models(detector_id="IDEA-Research/grounding-dino-tiny",
         "device": device,
         "detector": {"processor": det_processor, "model": det_model},
         "segmenter": {"processor": seg_processor, "model": seg_model},
-        "inpaint": inpaint_pipe,
+        "inpaint": inpaint_pipe
     }
 
 
@@ -144,10 +144,12 @@ if run:
         # 7) Run Stable Diffusion inpainting to enhance realism
         with st.spinner("Running inpainting for realism..."):
             # Use the composited image as input
-            inpaint_source_pil = utils.pil_from_np_rgb(warped_rgb)            
+            inpaint_source_pil = utils.pil_from_np_rgb(warped_rgb)
 
+            #7.1) Prepare mask for inpainting
+            border_mask = utils.make_border_mask(mask)
             # The mask should be white where the TV is, black elsewhere
-            mask_pil = Image.fromarray(mask * 255).convert("L")
+            mask_pil = border_mask
             # mask_pil.save("mask_debug.png")  # debug
             # inpaint_source_pil.save("cropped wrapped image.png")  # debug
             
@@ -157,22 +159,24 @@ if run:
                 prompt=fine_tuning_text_prompt,
                 image=inpaint_source_pil,
                 mask_image=mask_pil,
-                num_inference_steps=10,
-                guidance_scale=0.01,
+                num_inference_steps=30,
+                guidance_scale=5,
                 negative_prompt=negative_text_prompt,
             )
 
             st.subheader("After Stable Diffusion refinement")
             st.image(refined_img, width="content")
-        
+        refined_img = np.array(refined_img)  # PIL to numpy RGB
+        refined_img = cv2.cvtColor(refined_img, cv2.COLOR_RGB2BGR)
+
         # 8) Add the refined image back to original image
         refined_composited = utils.paste_warped_into_original(orig_bgr, np.array(refined_img), mask, box0)
         refined_composited_rgb = cv2.cvtColor(refined_composited, cv2.COLOR_BGR2RGB)
-        st.subheader("Final composition on original image (No finetuning)")
+        st.subheader("Final composition on original image ")
         st.image(refined_composited_rgb, width = "content")
 
 
-        # 7) Optionally allow download of final image
+        # 9) Optionally allow download of final image
         try:
             pil_img = utils.pil_from_np_rgb(refined_composited_rgb)
             buf = io.BytesIO()

@@ -8,10 +8,6 @@ def read_img(image_path):
     img = Image.open(image_path).convert("RGB")
     return img
 
-def convertBGR2RGB(image):
-    """Convert OpenCV BGR numpy image to RGB numpy image."""
-    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
 def drawbbox(image, boxes, labels=None):
     """
     Draw boxes on image_path and show with cv2.imshow.
@@ -289,3 +285,18 @@ def visualize_masks(image, masks):
     # cv2.destroyAllWindows()
     return overlay
 
+def make_border_mask(mask, inner_margin=1):
+    
+    m = (mask > 0).astype(np.uint8) * 255
+    kernel = np.ones((3,3), np.uint8)
+
+    # Erode to get inner safe region
+    inner = cv2.erode(m, kernel, iterations=inner_margin)
+
+    # ring: pixels in m but not in inner
+    ring = cv2.subtract(m, inner)
+
+    blurred = cv2.GaussianBlur(ring, (3,3), 0)
+
+    # convert to PIL mask (L), white=area to inpaint
+    return Image.fromarray(blurred).convert("L")
