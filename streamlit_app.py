@@ -4,16 +4,20 @@ import numpy as np
 import cv2
 from PIL import Image
 import io
+import torch
 
 # Import your modularized functions
-from detection import detection
-from segmentation import segmentation
+from detection import detection, load_detector
+from segmentation import segmentation, load_segmenter
 import utils
+
+
 
 st.set_page_config(layout="wide", page_title="TV-on-Wall Layout")
 
 st.title("Place TV on Wall — demo")
 st.write("Upload a wall image and a TV image, provide real-world sizes (meters), then press Run.")
+
 
 col1, col2 = st.columns(2)
 
@@ -37,6 +41,31 @@ def load_pil(uploader_file):
         return None
     return Image.open(io.BytesIO(uploader_file.getvalue())).convert("RGB")
 
+@st.cache_resource(show_spinner=False)
+def load_models(detector_id="IDEA-Research/grounding-dino-tiny",
+                segmenter_id="facebook/sam2.1-hiera-tiny"):
+    """
+    Loads and returns model/processor pairs for detector and segmenter.
+    Cached by Streamlit so subsequent calls return the same objects (no re-download).
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # these functions should return (processor, model)
+    det_processor, det_model = load_detector(detector_id=detector_id, device=device)
+    seg_processor, seg_model = load_segmenter(segmenter_id=segmenter_id, device=device)
+    return {
+        "device": device,
+        "detector": {"processor": det_processor, "model": det_model},
+        "segmenter": {"processor": seg_processor, "model": seg_model},
+    }
+
+models = load_models()
+device = models["device"]
+
+det_proc = models["detector"]["processor"]
+det_model = models["detector"]["model"]
+seg_proc = models["segmenter"]["processor"]
+seg_model = models["segmenter"]["model"]
+
 if run:
     if wall_file is None or tv_file is None:
         st.error("Please upload both wall and TV images.")
@@ -51,7 +80,7 @@ if run:
 
         # 1) Detection
         with st.spinner("Running detection..."):
-            boxes = detection(wall_pil, text_prompt)
+            boxes = detection(wall_pil, text_prompt, processor=det_proc, model=det_model, device=device)
         if boxes.shape[0] == 0:
             st.warning("No boxes detected with the provided prompt.")
             st.stop()
@@ -66,7 +95,7 @@ if run:
         # 2) Crop to bbox and run segmentation
         cropped = utils.crop_bbox(wall_pil, box0)
         with st.spinner("Running segmentation (SAM2)..."):
-            seg_masks = segmentation(cropped)
+            seg_masks = segmentation(cropped, processor=seg_proc, model=seg_model, device=device)
 
         # 3) Visualize mask over crop
         vis_masks = utils.visualize_masks(cropped, seg_masks)

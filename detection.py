@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import streamlit as st
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 
 # Default model id used in your original script
@@ -16,8 +15,17 @@ def load_detector(detector_id: str = DEFAULT_DETECTOR_ID, device: str = "cuda"):
     model = AutoModelForZeroShotObjectDetection.from_pretrained(detector_id).to(device)
     return processor, model
 
-@st.cache_resource(show_spinner=False)
+def load_detector(detector_id, device):
+    """
+    Load and return (processor, model) for Grounding DINO.
+    Caller may keep these around to avoid re-loading repeatedly.
+    """
+    processor = AutoProcessor.from_pretrained(detector_id)
+    model = AutoModelForZeroShotObjectDetection.from_pretrained(detector_id).to(device)
+    return processor, model
+
 def detection(image, text_prompt: str,
+              processor=None, model=None,
               detector_id: str = DEFAULT_DETECTOR_ID,
               device: str = "cuda",
               threshold: float = 0.3,
@@ -26,8 +34,9 @@ def detection(image, text_prompt: str,
     Run zero-shot detection on PIL image and return boxes as numpy array.
     Returns: numpy array of boxes [[x1,y1,x2,y2], ...]
     """
-    processor = AutoProcessor.from_pretrained(detector_id)
-    model = AutoModelForZeroShotObjectDetection.from_pretrained(detector_id).to(device)
+    if processor is None or model is None:
+        processor = AutoProcessor.from_pretrained(detector_id)
+        model = AutoModelForZeroShotObjectDetection.from_pretrained(detector_id).to(device)
 
     text_labels = [[text_prompt]]
     inputs = processor(images=image, text=text_labels, return_tensors="pt").to(device)
