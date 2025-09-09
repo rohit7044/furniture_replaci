@@ -1,4 +1,3 @@
-# streamlit_app.py
 import streamlit as st
 import numpy as np
 import cv2
@@ -9,6 +8,7 @@ import torch
 # Import your modularized functions
 from detection import detection, load_detector
 from segmentation import segmentation, load_segmenter
+from fine_tune import inpaint_image, load_inpaint_pipeline
 import utils
 
 
@@ -32,7 +32,8 @@ with col2:
     tv_height_m = st.number_input("TV height (meters)", min_value=0.01, value=0.7, step=0.01)
 
 text_prompt = st.text_input("Text prompt for detector", value="a wall")
-
+fine_tuning_text_prompt = st.text_input("Text prompt for fine tuning", value="A sleek flat-screen TV mounted on the wall, realistic lighting")
+negative_text_prompt = st.text_input("Negative text prompt for fine tuning", value="cartoon, cgi, 3d render, lowres, blurry")
 run = st.button("Run placement")
 
 # Helper to convert uploaded file to PIL
@@ -43,20 +44,31 @@ def load_pil(uploader_file):
 
 @st.cache_resource(show_spinner=False)
 def load_models(detector_id="IDEA-Research/grounding-dino-tiny",
-                segmenter_id="facebook/sam2.1-hiera-tiny"):
+                segmenter_id="facebook/sam2.1-hiera-tiny",
+                inpaint_id="stabilityai/stable-diffusion-2-inpainting"):
     """
-    Loads and returns model/processor pairs for detector and segmenter.
+    Loads and returns detector, segmenter, and inpainting pipelines.
     Cached by Streamlit so subsequent calls return the same objects (no re-download).
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    # these functions should return (processor, model)
+
+    # Detector (Grounding DINO)
     det_processor, det_model = load_detector(detector_id=detector_id, device=device)
+
+    # Segmenter (SAM2)
     seg_processor, seg_model = load_segmenter(segmenter_id=segmenter_id, device=device)
+
+    # Inpainting (Stable Diffusion)
+    inpaint_pipe = load_inpaint_pipeline(model_id=inpaint_id, device=device)
+
     return {
         "device": device,
         "detector": {"processor": det_processor, "model": det_model},
         "segmenter": {"processor": seg_processor, "model": seg_model},
+        "inpaint": inpaint_pipe,
     }
+
+
 
 models = load_models()
 device = models["device"]
@@ -65,6 +77,7 @@ det_proc = models["detector"]["processor"]
 det_model = models["detector"]["model"]
 seg_proc = models["segmenter"]["processor"]
 seg_model = models["segmenter"]["model"]
+inpaint_pipe = models["inpaint"]
 
 if run:
     if wall_file is None or tv_file is None:
@@ -125,7 +138,53 @@ if run:
         orig_bgr = cv2.cvtColor(np.array(wall_pil), cv2.COLOR_RGB2BGR)
         composited = utils.paste_warped_into_original(orig_bgr, warped_tv, mask, box0)
         composited_rgb = cv2.cvtColor(composited, cv2.COLOR_BGR2RGB)
-        st.subheader("Final composition on original image")
+        st.subheader("Final composition on original image (No finetuning)")
         st.image(composited_rgb, width = "content")
+
+        # 7) Run Stable Diffusion inpainting to enhance realism
+        with st.spinner("Running inpainting for realism..."):
+            # Use the composited image as input
+            inpaint_source_pil = utils.pil_from_np_rgb(warped_rgb)            
+
+            # The mask should be white where the TV is, black elsewhere
+            mask_pil = Image.fromarray(mask * 255).convert("L")
+            # mask_pil.save("mask_debug.png")  # debug
+            # inpaint_source_pil.save("cropped wrapped image.png")  # debug
+            
+
+            refined_img = inpaint_image(
+                inpaint_pipe,
+                prompt=fine_tuning_text_prompt,
+                image=inpaint_source_pil,
+                mask_image=mask_pil,
+                num_inference_steps=10,
+                guidance_scale=0.01,
+                negative_prompt=negative_text_prompt,
+            )
+
+            st.subheader("After Stable Diffusion refinement")
+            st.image(refined_img, width="content")
+        
+        # 8) Add the refined image back to original image
+        refined_composited = utils.paste_warped_into_original(orig_bgr, np.array(refined_img), mask, box0)
+        refined_composited_rgb = cv2.cvtColor(refined_composited, cv2.COLOR_BGR2RGB)
+        st.subheader("Final composition on original image (No finetuning)")
+        st.image(refined_composited_rgb, width = "content")
+
+
+        # 7) Optionally allow download of final image
+        try:
+            pil_img = utils.pil_from_np_rgb(refined_composited_rgb)
+            buf = io.BytesIO()
+            pil_img.save(buf, format="PNG")
+            byte_im = buf.getvalue()
+            st.download_button(
+                label="Download final image (PNG)",
+                data=byte_im,
+                file_name="tv_on_wall.png",
+                mime="image/png",
+            )
+        except Exception as e:
+            st.error(f"Failed to prepare download: {e}")
 
         st.success("Done!")

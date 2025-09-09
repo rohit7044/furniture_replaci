@@ -49,7 +49,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 Install directly:
 
 ```bash
-pip install transformers streamlit opencv-python pillow numpy
+pip install diffusers transformers accelerate scipy safetensors streamlit opencv-python pillow numpy
 ```
 ---
 

@@ -232,6 +232,10 @@ def overlay_tv_fixed_size_on_wall(wall_img, tv_img, wall_w_m, wall_h_m, tv_w_m, 
 
     return warped_tv,croppedwall_withTV, (mask > 0).astype(np.uint8)
 
+def pil_from_np_rgb(np_rgb):
+    """Convert numpy RGB (H,W,3) to PIL Image"""
+    return Image.fromarray(np_rgb)
+
 def paste_warped_into_original(orig_img, warped_tv, mask, bbox):
     """
     Paste warped_tv into orig_img at bbox using binary mask.
@@ -284,3 +288,4 @@ def visualize_masks(image, masks):
     # cv2.waitKey(0)
     # cv2.destroyAllWindows()
     return overlay
+
