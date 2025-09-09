@@ -1,12 +1,17 @@
+
+---
+
 # TV-on-Wall — README
 
 A small pipeline and Streamlit demo that detects a wall in a photo, segments the wall region, and places a TV image (warped to real-world dimensions) centered on that wall.
+Optionally, the pipeline can refine the result with Stable Diffusion inpainting to make the TV placement look more realistic.
 
-The repo is split into three logical modules:
+The repo is split into four logical modules:
 
-* `detection.py` — detection functions (Grounding DINO style).
-* `segmentation.py` — segmentation functions (SAM2 style).
+* `detection.py` — detection functions (Grounding DINO).
+* `segmentation.py` — segmentation functions (SAM2).
 * `utils.py` — image & geometry helpers, overlay/paste, mask visualization.
+* `fine_tune.py` — Stable Diffusion inpainting pipeline wrapper.
 * `streamlit_app.py` — Streamlit UI that ties everything together.
 
 ---
@@ -15,11 +20,10 @@ The repo is split into three logical modules:
 
 * [Installation](#installation)
 * [Quick start (run demo)](#quick-start-run-demo)
-* [How the pipeline works (high-level)](#how-the-pipeline-works-high-level)
+* [How the pipeline works](#how-the-pipeline-works)
 * [File structure](#file-structure)
 * [Usage & options](#usage--options)
 * [Troubleshooting & tips](#troubleshooting--tips)
-* [Example: non-Streamlit quick run](#example-non-streamlit-quick-run)
 * [Notes & caveats](#notes--caveats)
 * [License & credits](#license--credits)
 
@@ -27,30 +31,29 @@ The repo is split into three logical modules:
 
 # Installation
 
-> Tested on Python 3.8+. Use a virtual environment.
+> Tested on Python 3.10+. Use a virtual environment.
 
-1. Create & activate a virtualenv (recommended)
+1. Create & activate a virtualenv (recommended):
 
 ```bash
 conda create -n tv-wall python=3.10
 conda activate tv-wall
 ```
 
-2. Install PyTorch (match your CUDA / CPU configuration)
+2. Install PyTorch (match your CUDA / CPU configuration):
 
-Visit the PyTorch install page to pick the right command for your machine. Example CPU-only:
+Check the [PyTorch install page](https://pytorch.org/get-started/locally/) to pick the right command. Example for CPU-only:
 
 ```bash
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 ```
 
-3. Install the other packages
-
-Install directly:
+3. Install the other packages:
 
 ```bash
 pip install diffusers transformers accelerate scipy safetensors streamlit opencv-python pillow numpy
 ```
+
 ---
 
 # Quick start — run the Streamlit demo
@@ -63,35 +66,40 @@ streamlit run streamlit_app.py
 
 This opens a local web UI. Upload:
 
-* a wall photo (photo containing a wall),
-* a TV image (frontal/product shot),
-* enter the real-world sizes (meters) for the wall and the TV,
+* a **wall photo** (photo containing a wall),
+* a **TV image** (front-facing PNG/JPG),
+* enter the **real-world sizes** (meters) for the wall and the TV,
 * click **Run placement**.
 
-**Notes**
+**Notes:**
 
-* The first run downloads the detection and segmentation models from Hugging Face — this requires internet and can take time.
-* If you have GPU + proper CUDA PyTorch, inference will be much faster.
+* The first run downloads the detector, segmenter, and inpainting models from Hugging Face — this requires internet and may take time.
+* If you have GPU + CUDA PyTorch, inference will be much faster.
 
 ---
 
-# How the pipeline works (high-level)
+# How the pipeline works
 
 1. **Detection** (`detection.py`)
-   Uses a Grounding-DINO-like zero-shot detector to find bounding box(es) for the wall region given a text prompt (default: `"a wall"`). Returns pixel bounding boxes.
+   Uses Grounding DINO to find bounding box(es) for the wall region given a text prompt (default: `"a wall"`).
 
 2. **Segmentation** (`segmentation.py`)
-   Crops the detected wall region and passes it to a SAM2-style segmentation model to produce masks. We select the main mask (largest contour).
+   Crops the detected wall region and runs SAM2 to produce a wall mask. The largest mask is chosen.
 
-3. **Utilities & geometry** (`utils.py`)
+3. **Geometry & overlay** (`utils.py`)
 
-   * Convert real-world sizes (meters) to pixels using the provided wall dimensions and wall image resolution.
-   * Simplify the mask to a 4-corner quadrilateral (or fallback to a min-area rectangle).
-   * Compute a centered rectangle with the TV aspect ratio inside the wall quad and warp the TV image into that rectangle using a homography.
-   * Composite the warped TV back into the original image and provide intermediate visualizations (mask overlay, warped TV).
+   * Convert real-world sizes (meters) → pixels using wall dimensions and image resolution.
+   * Simplify the wall mask to 4 corners.
+   * Warp the TV image to a centered rectangle with correct aspect ratio inside the wall quad (homography).
+   * Composite the warped TV back into the original wall image.
 
-4. **Streamlit glue** (`streamlit_app.py`)
-   Accepts user inputs (images and sizes), runs detection → segmentation → overlay, and displays intermediate results (detected box, segmentation overlay, warped TV, final composition).
+4. **Optional realism enhancement** (`fine_tune.py`)
+
+   * Wraps a Stable Diffusion inpainting pipeline (`stabilityai/stable-diffusion-2-inpainting`).
+   * Runs one inpaint pass with a narrow border mask around the TV → generates soft shadows / blends edges.
+
+5. **Streamlit glue** (`streamlit_app.py`)
+   Handles file upload, user inputs, runs the pipeline, and displays results (detected box, mask overlay, warped TV, final composition, optional refined output).
 
 ---
 
@@ -102,8 +110,9 @@ This opens a local web UI. Upload:
 ├── detection.py
 ├── segmentation.py
 ├── utils.py
+├── fine_tune.py
 ├── streamlit_app.py
-├── requirements.txt    # optional
+├── requirements.txt
 └── README.md
 ```
 
@@ -111,31 +120,44 @@ This opens a local web UI. Upload:
 
 # Usage & options
 
-* **Text prompt**: In the Streamlit app you can change the detection prompt from `"a wall"` to something more specific (e.g. `"living room wall"`, `"white wall"`) to improve detection in cluttered scenes.
+* **Text prompt** — Adjust in the Streamlit app. Default: `"a wall"`. Try `"living room wall"` or `"white wall"` for cluttered scenes.
 
-* **Model selection**: Change `DEFAULT_DETECTOR_ID` / `DEFAULT_SEGMENTER_ID` in `detection.py` / `segmentation.py` if you want different models. Make sure the `transformers` API matches the model architecture.
+* **Model IDs** — Change in `detection.py` / `segmentation.py` if you want different Hugging Face models.
 
-* **Selecting detection box**: The provided app uses the first detected bounding box. You can adapt `streamlit_app.py` to let the user select which box to use.
+* **TV placement** — The TV is centered on the wall by default. Adjust scale fraction inside `utils.py` if you want smaller/larger placement.
 
-* **Adjusting TV placement**: Tweak `utils.shrink_quad_toward_centroid()` or `utils.center_rect_from_minarea()` scale parameters to change how large the TV appears on the wall.
+* **Inpainting realism** — In the Streamlit app you can toggle “Enhance realism with Stable Diffusion inpainting.” This uses a border mask so only edges get refined, not the TV interior.
 
 ---
 
 # Troubleshooting & tips
 
-* **Very slow / first-run hangs**: model weights download on first use. Be patient or pre-download model caches using the Hugging Face CLI.
+* **First run is slow** — models download automatically. Use `HF_HOME` env var to cache in a specific folder if needed.
 
-* **GPU out of memory**: either switch to CPU (`device="cpu"`), reduce input resolution (downscale the wall image), or use smaller model variants.
+* **GPU memory errors** — lower wall image resolution, reduce inference steps, or run on CPU (`device="cpu"`).
 
-* **No detection or wrong detection**: try more specific prompts or crop/resize the input. If the wall is heavily occluded, detection may fail.
+* **Detection misses wall** — try a different text prompt or crop the image tighter.
 
-* **Segmentation returns no contours**: visualise raw masks with `utils.visualize_masks()` to debug. Make sure the crop actually contains wall pixels.
+* **Segmentation fails** — visualize masks (`utils.visualize_masks`) to debug; sometimes SAM needs a clearer input.
 
-* **API or model errors**: `transformers` APIs and model availability change over time. If loading `Sam2Processor` / `Sam2Model` or detection classes fails, check model compatibility or swap to a supported model and adjust code.
+* **TV gets distorted in inpainting** — ensure the inpaint mask is only a thin border, not the full TV region.
+
+---
 
 # Notes & caveats
 
-* The pipeline assumes the wall is a planar rectangle in the scene. Strong lens distortion, non-planar walls, or severe perspective foreshortening will produce imperfect warps.
-* Real-world accuracy depends on how accurate the provided wall and TV physical measurements are.
-* This is a prototype / research demo — it is not production AR. Use as a starting point and harden model loading, error handling, and UI for production uses.
+* Assumes the wall is approximately planar. Strong perspective, fisheye, or occlusion can break placement.
+* Real-world scaling depends on accurate wall and TV measurements.
+* Inpainting refinement is limited: it adds shadows/blending, but won’t always be photoreal in all lighting conditions.
+* This is a prototype / research demo, not production-ready AR.
 
+---
+
+# License & credits
+
+* [Grounding DINO](https://github.com/IDEA-Research/GroundingDINO)
+* [SAM2](https://ai.meta.com/sam/)
+* [Stable Diffusion Inpainting](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting)
+* Hugging Face 🤗 `transformers` + `diffusers`
+
+---
